@@ -1,0 +1,80 @@
+name: Dependency Update Check
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: 21
+
+jobs:
+  check-dependencies:
+    name: Check for Dependency Updates
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./temperature-proxy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Check for dependency updates
+        run: mvn versions:display-dependency-updates -B | tee dependency-updates.txt
+
+      - name: Check for plugin updates
+        run: mvn versions:display-plugin-updates -B | tee plugin-updates.txt
+
+      - name: Check for parent POM updates
+        run: mvn versions:display-parent-updates -B | tee parent-updates.txt
+
+      - name: Upload update reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-reports
+          path: |
+            temperature-proxy/dependency-updates.txt
+            temperature-proxy/plugin-updates.txt
+            temperature-proxy/parent-updates.txt
+          retention-days: 30
+
+  security-scan:
+    name: Security Vulnerability Scan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./temperature-proxy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Run OWASP Dependency Check
+        run: |
+          mvn org.owasp:dependency-check-maven:check \
+            -DfailBuildOnCVSS=7 \
+            -DsuppressionFiles=dependency-check-suppressions.xml \
+            -B || true
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: temperature-proxy/target/dependency-check-report.html
+          retention-days: 30

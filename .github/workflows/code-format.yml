@@ -1,0 +1,50 @@
+name: Code Format Check
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  JAVA_VERSION: 21
+
+jobs:
+  format-check:
+    name: Check Code Formatting
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./temperature-proxy
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Check Java formatting
+        run: |
+          mvn spotless:check -B || {
+            echo "Code formatting issues found. Run 'mvn spotless:apply' locally to fix."
+            exit 1
+          }
+
+      - name: Check line endings
+        run: |
+          if git ls-files | xargs file | grep CRLF; then
+            echo "Files with CRLF line endings found. Use LF line endings."
+            exit 1
+          fi
+          echo "All files use LF line endings"
+
+      - name: Check trailing whitespace
+        run: |
+          if git diff --check HEAD^; then
+            echo "Trailing whitespace found"
+            exit 1
+          fi
+          echo "No trailing whitespace found"

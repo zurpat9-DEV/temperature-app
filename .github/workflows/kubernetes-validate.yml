@@ -1,0 +1,153 @@
+name: Kubernetes Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  validate-manifests:
+    name: Validate Kubernetes Manifests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./temperature-proxy/k8s
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Validate YAML syntax
+        run: |
+          for file in *.yaml; do
+            echo "Validating $file..."
+            python3 -c "import yaml; yaml.safe_load(open('$file'))" || exit 1
+          done
+          echo "All YAML files are syntactically valid"
+
+      - name: Validate Kubernetes manifests
+        run: kubectl apply --dry-run=client -k .
+
+      - name: Kustomize build
+        run: |
+          kubectl kustomize . > built-manifests.yaml
+          echo "Kustomize build successful"
+
+      - name: Upload built manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubernetes-manifests
+          path: temperature-proxy/k8s/built-manifests.yaml
+          retention-days: 7
+
+  lint-manifests:
+    name: Lint Kubernetes Manifests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./temperature-proxy/k8s
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install kubeval
+        run: |
+          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          sudo mv kubeval /usr/local/bin/
+
+      - name: Validate with kubeval
+        run: kubeval *.yaml
+
+      - name: Install kube-linter
+        run: |
+          wget https://github.com/stackrox/kube-linter/releases/download/v0.6.5/kube-linter-linux.tar.gz
+          tar xf kube-linter-linux.tar.gz
+          sudo mv kube-linter /usr/local/bin/
+
+      - name: Lint with kube-linter
+        run: kube-linter lint .
+
+  integration-test:
+    name: Kubernetes Integration Test
+    runs-on: ubuntu-latest
+    needs: validate-manifests
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build application
+        working-directory: ./temperature-proxy
+        run: mvn package -DskipTests -B
+
+      - name: Build Docker image
+        working-directory: ./temperature-proxy
+        run: docker build -t temperature-proxy:test .
+
+      - name: Setup kind
+        uses: helm/kind-action@v1.8.0
+        with:
+          cluster_name: test-cluster
+          wait: 120s
+
+      - name: Load image to kind
+        run: kind load docker-image temperature-proxy:test --name test-cluster
+
+      - name: Update image tag in deployment
+        working-directory: ./temperature-proxy/k8s
+        run: |
+          sed -i 's|temperature-proxy:latest|temperature-proxy:test|g' deployment.yaml
+
+      - name: Deploy to kind
+        working-directory: ./temperature-proxy/k8s
+        run: kubectl apply -k .
+
+      - name: Wait for deployment
+        run: |
+          kubectl wait --for=condition=ready pod -l app=temperature-proxy -n temperature-proxy --timeout=180s
+
+      - name: Check deployment status
+        run: |
+          kubectl get all -n temperature-proxy
+          kubectl describe deployment temperature-proxy -n temperature-proxy
+
+      - name: Test liveness probe
+        run: |
+          POD_NAME=$(kubectl get pods -n temperature-proxy -l app=temperature-proxy -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n temperature-proxy $POD_NAME -- wget -q -O- http://localhost:8080/actuator/health/liveness
+
+      - name: Test readiness probe
+        run: |
+          POD_NAME=$(kubectl get pods -n temperature-proxy -l app=temperature-proxy -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n temperature-proxy $POD_NAME -- wget -q -O- http://localhost:8080/actuator/health/readiness
+
+      - name: Port forward and test API
+        run: |
+          kubectl port-forward -n temperature-proxy svc/temperature-proxy 8080:8080 &
+          sleep 10
+          curl -f "http://localhost:8080/actuator/health" || exit 1
+          curl -f "http://localhost:8080/api/v1/weather/current?lat=52.52&lon=13.41" || exit 1
+
+      - name: Show pod logs on failure
+        if: failure()
+        run: |
+          kubectl logs -n temperature-proxy -l app=temperature-proxy --tail=100
+
+      - name: Cleanup
+        if: always()
+        run: kubectl delete namespace temperature-proxy --ignore-not-found=true
