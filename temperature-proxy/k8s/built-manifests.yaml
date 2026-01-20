@@ -1,0 +1,314 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/component: namespace
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy
+---
+apiVersion: v1
+automountServiceAccountToken: false
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: serviceaccount
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy-sa
+  namespace: temperature-proxy
+---
+apiVersion: v1
+data:
+  APP_CACHE_MAX_SIZE: "10000"
+  APP_CACHE_TTL: 60s
+  APP_OPEN_METEO_CONNECT_TIMEOUT: 500ms
+  APP_OPEN_METEO_TIMEOUT: 1s
+  APP_RATE_LIMIT_REQUESTS_PER_MINUTE: "100"
+  ENVIRONMENT: production
+  JAVA_OPTS: -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:InitialRAMPercentage=50.0
+  SPRING_PROFILES_ACTIVE: docker
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/component: config
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy-config
+  namespace: temperature-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: service
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy
+  namespace: temperature-proxy
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: http
+  selector:
+    app: temperature-proxy
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: api
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy
+  namespace: temperature-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: temperature-proxy
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/name: temperature-proxy
+      app.kubernetes.io/version: 1.0.0
+  template:
+    metadata:
+      labels:
+        app: temperature-proxy
+        app.kubernetes.io/managed-by: kustomize
+        app.kubernetes.io/name: temperature-proxy
+        app.kubernetes.io/version: 1.0.0
+    spec:
+      containers:
+      - envFrom:
+        - configMapRef:
+            name: temperature-proxy-config
+        image: temperature-proxy:latest
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /actuator/health/liveness
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        name: temperature-proxy
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /actuator/health/readiness
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      serviceAccountName: temperature-proxy-sa
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - emptyDir: {}
+        name: tmp
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app.kubernetes.io/component: pdb
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy-pdb
+  namespace: temperature-proxy
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: temperature-proxy
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/name: temperature-proxy
+      app.kubernetes.io/version: 1.0.0
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  labels:
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy-hpa
+  namespace: temperature-proxy
+spec:
+  behavior:
+    scaleDown:
+      policies:
+      - periodSeconds: 60
+        type: Percent
+        value: 10
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      policies:
+      - periodSeconds: 15
+        type: Percent
+        value: 100
+      - periodSeconds: 15
+        type: Pods
+        value: 4
+      selectPolicy: Max
+      stabilizationWindowSeconds: 0
+  maxReplicas: 10
+  metrics:
+  - resource:
+      name: cpu
+      target:
+        averageUtilization: 70
+        type: Utilization
+    type: Resource
+  - resource:
+      name: memory
+      target:
+        averageUtilization: 80
+        type: Utilization
+    type: Resource
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: temperature-proxy
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "5"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "10"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "10"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: 1m
+  labels:
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy-ingress
+  namespace: temperature-proxy
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: weather-api.example.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: temperature-proxy
+            port:
+              number: 8080
+        path: /api
+        pathType: Prefix
+      - backend:
+          service:
+            name: temperature-proxy
+            port:
+              number: 8080
+        path: /actuator
+        pathType: Prefix
+      - backend:
+          service:
+            name: temperature-proxy
+            port:
+              number: 8080
+        path: /swagger-ui
+        pathType: Prefix
+      - backend:
+          service:
+            name: temperature-proxy
+            port:
+              number: 8080
+        path: /v3/api-docs
+        pathType: Prefix
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  labels:
+    app.kubernetes.io/component: networkpolicy
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/version: 1.0.0
+  name: temperature-proxy-netpol
+  namespace: temperature-proxy
+spec:
+  egress:
+  - ports:
+    - port: 53
+      protocol: UDP
+    to:
+    - namespaceSelector: {}
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - port: 8080
+      protocol: TCP
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - port: 8080
+      protocol: TCP
+  podSelector:
+    matchLabels:
+      app: temperature-proxy
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/name: temperature-proxy
+      app.kubernetes.io/version: 1.0.0
+  policyTypes:
+  - Ingress
+  - Egress

@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: temperature-proxy
+
+app:
+  open-meteo:
+    base-url: https://api.open-meteo.com/v1/forecast
+    timeout: 1s
+    connect-timeout: 500ms
+  cache:
+    ttl: 60s
+    max-size: 5000
+  rate-limit:
+    requests-per-minute: 100
+  cors:
+    allowed-origins: "*"
+
+logging:
+  level:
+    root: INFO
+    com.temperature.proxy: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

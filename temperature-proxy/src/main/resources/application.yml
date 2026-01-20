@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: temperature-proxy
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    date-format: "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    time-zone: UTC
+
+server:
+  port: 8080
+  shutdown: graceful
+
+app:
+  open-meteo:
+    base-url: https://api.open-meteo.com/v1/forecast
+    timeout: 1s
+    connect-timeout: 500ms
+  cache:
+    ttl: 60s
+    max-size: 10000
+    coordinate-precision: 2
+  rate-limit:
+    requests-per-minute: 100
+  cors:
+    allowed-origins: "*"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, metrics, prometheus, info
+      base-path: /actuator
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include: readinessState, openMeteo
+        liveness:
+          include: livenessState
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${ENVIRONMENT:local}
+
+logging:
+  level:
+    root: INFO
+    com.temperature.proxy: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

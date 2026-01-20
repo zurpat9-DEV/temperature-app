@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: temperature-proxy
+  labels:
+    app.kubernetes.io/name: temperature-proxy
+    app.kubernetes.io/component: namespace
